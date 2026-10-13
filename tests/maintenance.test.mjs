@@ -13,16 +13,19 @@ import {Vault} from '../server/vault.mjs';
 import {Store} from '../server/store.mjs';
 const exec=promisify(execFile),cli=resolve('bin/linebridge.mjs'),tray=resolve('server/tray.mjs');
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
-async function ports(){
-  for(;;){
-    const servers=[];
+async function ports({holdReservedPort=false}={}){
+  for(let attempt=0;attempt<30;attempt++){
+    const servers=[];let blocker;
     try{
-      const bind=async port=>{const s=createServer();servers.push(s);await new Promise((ok,fail)=>{s.once('error',fail);s.listen(port,'127.0.0.1',ok);});return s.address().port;};
-      const admin=await bind(0),gateway=await bind(0);if(gateway>=65535)continue;await bind(gateway+1);return {admin,gateway};
-    }catch{}finally{await Promise.all(servers.filter(s=>s.listening).map(s=>new Promise(r=>s.close(r))));}
+      const bind=async port=>{const s=createServer();servers.push(s);await new Promise((ok,fail)=>{s.once('error',fail);s.listen(port,'127.0.0.1',ok);});return s;};
+      const admin=(await bind(0)).address().port,gateway=(await bind(0)).address().port;if(gateway>=65535)continue;
+      const reserved=await bind(gateway+1);if(holdReservedPort)blocker=reserved;return {admin,gateway,blocker};
+    }catch(error){if(error.code!=='EADDRINUSE')throw error;}
+    finally{await Promise.all(servers.filter(s=>s.listening&&s!==blocker).map(s=>new Promise(r=>s.close(r))));}
   }
+  throw new Error('No free maintenance test ports');
 }
-async function fixture(t){
+async function fixture(t,{holdReservedPort=false}={}){
   const directory=await mkdtemp(join(tmpdir(),'linebridge-maintenance-')),data=await realpath(directory),children=[];
   // Metadata uses the service's canonical path, including Windows short TEMP paths.
   // Explicit synthetic host model for Linux: exercise JS lifecycle/IPC and
@@ -30,7 +33,7 @@ async function fixture(t){
   const preload=join(data,'synthetic-host.mjs');
   await writeFile(preload,"if(process.platform==='linux')Object.defineProperty(process,'platform',{value:'darwin'});");
   const env={...process.env,NODE_OPTIONS:`--import=${pathToFileURL(preload).href}`,LINE_BRIDGE_DATA:data};
-  const p=await ports();
+  const p=await ports({holdReservedPort});
   function start(file,args=[]){
     const child=spawn(process.execPath,[file,...args],{env,stdio:['pipe','pipe','pipe'],windowsHide:true});children.push(child);
     let output='';child.stdout.on('data',b=>output+=b);child.stderr.on('data',b=>output+=b);
@@ -40,6 +43,7 @@ async function fixture(t){
   async function run(command,...args){return exec(process.execPath,[cli,command,'--data-dir',data,...args],{env,timeout:15000,windowsHide:true});}
   t.after(async()=>{
     for(const child of children)if(child.exitCode===null&&child.signalCode===null){child.stdin.end();child.kill();}
+    if(p.blocker?.listening)await new Promise(r=>p.blocker.close(r));
     // Only the service whose instance metadata lives in this disposable fixture.
     try{const m=JSON.parse(await readFile(join(data,'service.json'),'utf8'));if(m.dataDir===data&&m.pid!==process.pid)process.kill(m.pid);}catch{}
     await pause(80);await removeClientFixture(directory);
@@ -156,9 +160,13 @@ test('missing data and held unidentified service locks fail closed, without enro
 });
 
 test('concurrent shutdowns share maintenance and wait for a busy reserved port without touching its owner',async t=>{
-  const f=await fixture(t),service=f.serve();await service.until(/Dashboard:/);
-  const blocker=createServer();await new Promise(r=>blocker.listen(f.p.gateway+1,'127.0.0.1',r));
+  // Hold the original reservation through startup: rebinding after the service
+  // is ready lets another parallel test claim the connector port in between.
+  const f=await fixture(t,{holdReservedPort:true}),blocker=f.p.blocker;
+  assert.equal(blocker.address().port,f.p.gateway+1);
+  const service=f.serve();
   try{
+    await service.until(/Dashboard:/);
     const first=f.run('shutdown','--timeout-ms','1000'),second=f.run('shutdown','--timeout-ms','1000');
     await Promise.all([first,second].map(p=>assert.rejects(p,e=>/shutdown_timeout/.test(e.stderr))));
     assert.equal(blocker.listening,true);assert.equal(await service.closed,0);
