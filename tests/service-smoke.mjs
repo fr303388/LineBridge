@@ -20,7 +20,7 @@ try{
   client=new Client({name:'LineBridge integration check',version:'1.0'});
   await client.connect(new StreamableHTTPClientTransport(new URL(`${gateway}/mcp`)));
   assert.equal((await call('/state')).tokens.length,0);
-  const tools=await client.listTools();assert.equal(tools.tools.length,9);
+  const tools=await client.listTools();assert.equal(tools.tools.length,10);
   const result=await client.callTool({name:'line_list_chats',arguments:{accountId:id}});assert.ok(!result.isError);const chats=JSON.parse(result.content[0].text);assert.equal(chats.length,1);assert.equal(chats[0].id,'demo-group');
   const sent=await client.callTool({name:'line_send_message',arguments:{accountId:id,chatId:'demo-group',text:'synthetic-integration-message',idempotencyKey:'integration-0001'}});assert.ok(!sent.isError);
   const events=await client.callTool({name:'line_poll_events',arguments:{accountId:id,after:0}});assert.ok(!events.isError);const inbox=JSON.parse(events.content[0].text);assert.equal(inbox.events.length,1);assert.equal(inbox.events[0].message.text,'synthetic-integration-message');

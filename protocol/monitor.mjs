@@ -1,6 +1,6 @@
 import {normalizeMessage} from '../server/drivers.mjs';
 import timers from 'node:timers/promises';
-import {TALK_POLL_TIMEOUT_MS,DEFAULT_REFRESH_INTERVAL_SECONDS,TALK_REARM_MS,talkRearmDelayMs,monitorRetryMs} from '../server/monitor-policy.mjs';
+import {TALK_POLL_TIMEOUT_MS,DEFAULT_REFRESH_INTERVAL_SECONDS,TALK_REARM_MS,TALK_IDLE_EXPIRY_MIN_MS,talkRearmDelayMs,monitorRetryMs} from '../server/monitor-policy.mjs';
 import {rpcDiagnostic} from '../server/rpc-transport.mjs';
 import {SquareSync} from './square-sync.mjs';
 export {SQUARE_BASELINE_PAGE_DELAY_MS,SQUARE_BASELINE_MAX_PAGES,SQUARE_BASELINE_BURST_MS} from './square-sync.mjs';
@@ -66,6 +66,7 @@ export class LiveMonitor {
       pollDeadlineAt:status==='polling'&&details.pollTimeoutMs?new Date(Date.parse(now)+details.pollTimeoutMs).toISOString():null,
       nextRetryAt:status==='retrying'&&details.diagnostic?new Date(Date.parse(now)+details.diagnostic.retryInMs).toISOString():null,
       lastFailure:details.diagnostic?{at:now,...details.diagnostic}:previous?.lastFailure??null,
+      ...(details.idleExpiry||previous?.lastIdleExpiryAt?{lastIdleExpiryAt:details.idleExpiry?now:previous.lastIdleExpiryAt}:{}),
       ...(this.diagnostics&&(details.pagination??previous?.pagination)?{pagination:details.pagination??previous.pagination}:{})};
     this.pollStates.set(channel,state);this.event('monitor_status',state);
   }
@@ -105,7 +106,29 @@ export class LiveMonitor {
         this.status('talk','running',undefined,true);retries=0;
         fastEmpty=!response.fullSyncResponse&&response.operationResponse?.operations?.length===0&&Date.now()-startedAt<1000?fastEmpty+1:0;
         await pause(Math.max(this.talkRearmMs,talkRearmDelayMs(fastEmpty)),signal);
-      }catch(error){if(!this.active)break;fastEmpty=0;const retryInMs=this.retryDelay(retries++,error);this.status('talk','retrying','monitor_poll_failed',false,{diagnostic:pollDiagnostic(error,stage,Date.now()-startedAt,timeoutMs,retryInMs)});await pause(retryInMs,signal);}
+      }catch(failure){
+        if(!this.active)break;fastEmpty=0;let error=failure;
+        if(stage==='poll'&&await this.idleExpiry(error,cursor,Date.now()-startedAt,signal)){
+          // Same outcome as an empty poll: nothing to capture, cursor durably saved.
+          try{
+            stage='checkpoint';await this.driver.storage.set('monitor.talk',cursor);
+            this.status('talk','running',undefined,true,{idleExpiry:true});retries=0;
+            await pause(Math.max(this.talkRearmMs,rpcDiagnostic(failure).retryAfterMs??0),signal);continue;
+          }catch(checkpointError){if(!this.active)break;error=checkpointError;}
+        }
+        const retryInMs=this.retryDelay(retries++,error);this.status('talk','retrying','monitor_poll_failed',false,{diagnostic:pollDiagnostic(error,stage,Date.now()-startedAt,timeoutMs,retryInMs)});await pause(retryInMs,signal);
+      }
     }
+  }
+  // An empty HTTP 410 that ends a held Talk poll is LINE expiring an idle long
+  // poll, but only if LINE's latest operation revision confirms nothing newer
+  // than this cursor exists. Otherwise it remains a visible poll failure.
+  async idleExpiry(error,cursor,elapsedMs,signal){
+    const meta=rpcDiagnostic(error);
+    if(meta.endpointClass!=='talk_sync'||meta.httpStatus!==410||meta.responseEmpty!==true||meta.responseParse||elapsedMs<TALK_IDLE_EXPIRY_MIN_MS||!this.active)return false;
+    try{
+      const latest=await this.request(signal,()=>this.driver.client.request.request([],'getLastOpRevision',4,false,'/S4'));
+      return this.active&&['number','bigint'].includes(typeof latest)&&BigInt(latest)<=BigInt(cursor.revision);
+    }catch{return false;}
   }
 }

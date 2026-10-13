@@ -168,4 +168,4 @@ CLI_COMMAND send --profile PROFILE_NAME --account ACCOUNT_ID --chat CHAT_ID --ke
 
 ## 画像の取得と Flex メッセージ
 
-保存済み画像と基本ステッカーは `media` / MCP `line_read_image` で取得します。Talk `send-flex` は送信権限とメッセージごとの承認が必要で、Letter Sealing ではなく通信経路の暗号化を使います。OpenChat Flex は送信前に拒否されます。2026-10-06 の承認済み OA 宛 Flex テストは `INCOMPATIBLE_APP_VERSION` で拒否されました。成功・表示の証拠はなく、すべての相手で非対応とも断定できません。実画像取得の検証は未完了です。[操作と検証結果](CLI.md#images-and-flex-messages)。
+保存済み画像と基本ステッカーは `media` / MCP `line_read_image` で、ボイスメッセージ（M4A/3GP、変換・文字起こしなし）は `media` / ゲートウェイ MCP `line_read_audio` で取得します。Talk `send-flex` は送信権限とメッセージごとの承認が必要で、Letter Sealing ではなく通信経路の暗号化を使います。OpenChat Flex は送信前に拒否されます。2026-10-06 の承認済み OA 宛 Flex テストは `INCOMPATIBLE_APP_VERSION` で拒否されました。成功・表示の証拠はなく、すべての相手で非対応とも断定できません。実画像取得の検証は未完了です。[操作と検証結果](CLI.md#images-and-flex-messages)。

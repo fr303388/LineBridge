@@ -45,7 +45,7 @@ test('HTTP and MCP share scopes; the gateway cannot expose dashboard routes or b
   const client=new Client({name:'integration-test',version:'1.0.0'});
   const transport=new StreamableHTTPClientTransport(new URL(`${base}/mcp`),{requestInit:{headers}});
   await client.connect(transport);t.after(()=>client.close());
-  const toolList=await client.listTools();assert.equal(toolList.tools.length,9);
+  const toolList=await client.listTools();assert.equal(toolList.tools.length,10);assert.equal(toolList.tools.find(tool=>tool.name==='line_read_audio').annotations.readOnlyHint,true);
   const versionTool=toolList.tools.find(tool=>tool.name==='line_get_version');assert.equal(versionTool.annotations.readOnlyHint,true);
   assert.equal(client.getServerVersion().version,VERSION);
   const mcpVersion=await client.callTool({name:'line_get_version',arguments:{}});assert.deepEqual(JSON.parse(mcpVersion.content[0].text),version);
@@ -122,7 +122,7 @@ test('same-VM HTTP and official MCP clients read/send without minting a token',a
   const endpoint=`${base}/api/v1/accounts/${a.id}/chats/demo-group/messages`;
   const sent=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':'local-http-001'},body:JSON.stringify({text:'local synthetic message'})});assert.equal(sent.status,200);
   const client=new Client({name:'same-VM-agent',version:'1'});await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));t.after(()=>client.close());
-  assert.equal((await client.listTools()).tools.length,9);
+  assert.equal((await client.listTools()).tools.length,10);
   const read=await client.callTool({name:'line_read_messages',arguments:{accountId:a.id,chatId:'demo-group'}});assert.ok(JSON.parse(read.content[0].text).messages.some(m=>m.text==='local synthetic message'));
   const mcpSent=await client.callTool({name:'line_send_message',arguments:{accountId:a.id,chatId:'demo-group',text:'MCP synthetic message',idempotencyKey:'local-mcp-001'}});assert.equal(JSON.parse(mcpSent.content[0].text).delivery,'sandbox_only');
   const index=await fetch(adminBase),cookie=index.headers.getSetCookie()[0].split(';')[0];

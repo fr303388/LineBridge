@@ -644,6 +644,12 @@ mark{padding:0 2px;border-radius:4px;background:color-mix(in srgb,var(--accent) 
 .token-title strong{font-size:14px;font-weight:650}
 .token-grants{display:flex;flex-wrap:wrap;gap:6px;margin:7px 0 4px}
 .token-main small{color:var(--text-3);font-size:12px}
+.token-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:6px}
+.token-scope-account{display:grid;gap:10px;padding:12px 0;border-top:1px solid var(--border)}
+.token-scope-account:first-child{border-top:0}
+.token-scope-account .grant-row{padding:0;border-top:0}
+.token-scope-account .dialog-note{margin-top:0}
+.token-scope-account .picker-list{max-height:240px}
 .grant-list{display:grid}
 .grant-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 0;border-top:1px solid var(--border)}
 .grant-row:first-child{border-top:0}

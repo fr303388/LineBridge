@@ -4,6 +4,10 @@ export const TALK_POLL_TIMEOUT_MS=180000;
 export const MONITOR_STALE_AFTER_MS=60000;
 export const DEFAULT_REFRESH_INTERVAL_SECONDS=15;
 export const TALK_REARM_MS=250;
+// LINE may end an idle Talk long poll early with an empty HTTP 410 (observed
+// after about 110 seconds). Only a held request can be such an idle expiry; a
+// quick 410 stays a failure.
+export const TALK_IDLE_EXPIRY_MIN_MS=20000;
 export function talkRearmDelayMs(fastEmptyCount){return fastEmptyCount<2?TALK_REARM_MS:Math.min(5000,1000*2**Math.min(3,fastEmptyCount-2));}
 export const MIN_REFRESH_INTERVAL_SECONDS=3;
 export const MAX_REFRESH_INTERVAL_SECONDS=3600;

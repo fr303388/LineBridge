@@ -1,4 +1,5 @@
 import {toggleChatAccess} from './chat-access.js';
+import {scopeText,saveTokenScope} from './token-scope.js';
 import {createConnections,providerName} from './connections.js';
 import { prepareSendIntent } from './send-intent.js';
 import {label,errorText,coverage} from './locale.js';
@@ -419,9 +420,46 @@ $('#cancel-login').addEventListener('click',()=>action(cancelLogin));$('#close-l
 
 function renderTokens(){
   const accountLabel=id=>state.accounts.find(a=>a.id===id)?.label||'已移除帳號';
-  $('#token-list').innerHTML=state.tokens.length?state.tokens.map(t=>{const expired=Date.parse(t.expires_at)<=Date.now(),active=!t.revoked&&!expired;return `<div class="token${active?'':' inactive'}"><span class="token-icon">${icon('key')}</span><div class="token-main"><div class="token-title"><strong>${escape(t.name)}</strong>${badge(t.revoked?'已撤銷':expired?'已過期':'有效',active?'good':'')}</div><div class="token-grants">${t.grants.map(g=>`<span class="chip">${escape(accountLabel(g.accountId))} · ${[g.read?'讀取':null,g.send?'傳送':null].filter(Boolean).join(' + ')}</span>`).join('')}</div><small>到期 ${escape(short(t.expires_at))} · 上次使用 ${escape(short(t.last_used))}</small></div>${active?`<button class="btn sm danger" data-revoke="${escape(t.id)}">撤銷</button>`:''}</div>`;}).join(''):`<div class="empty compact"><span class="empty-icon">${icon('key')}</span><h3>尚無權杖</h3><p>建立權杖並啟動雲端連線，即可授權雲端 AI。</p></div>`;
+  $('#token-list').innerHTML=state.tokens.length?state.tokens.map(t=>{const expired=Date.parse(t.expires_at)<=Date.now(),active=!t.revoked&&!expired,managed=t.grants.some(g=>g.localOnly);return `<div class="token${active?'':' inactive'}"><span class="token-icon">${icon('key')}</span><div class="token-main"><div class="token-title"><strong>${escape(t.name)}</strong>${badge(t.revoked?'已撤銷':expired?'已過期':'有效',active?'good':'')}</div><div class="token-grants">${t.grants.map(g=>`<span class="chip">${escape(accountLabel(g.accountId))} · ${[g.read?'讀取':null,g.send?'傳送':null].filter(Boolean).join(' + ')} · ${managed?'本機 AI 設定':escape(scopeText(g))}</span>`).join('')}</div><small>到期 ${escape(short(t.expires_at))} · 上次使用 ${escape(short(t.last_used))}</small></div>${active?`<div class="token-actions">${managed?'':`<button class="btn sm" data-token-scope="${escape(t.id)}">編輯範圍</button>`}<button class="btn sm danger" data-revoke="${escape(t.id)}">撤銷</button></div>`:''}</div>`;}).join(''):`<div class="empty compact"><span class="empty-icon">${icon('key')}</span><h3>尚無權杖</h3><p>建立權杖並啟動雲端連線，即可授權雲端 AI。</p></div>`;
   document.querySelectorAll('[data-revoke]').forEach(e=>e.addEventListener('click',()=>action(async()=>{await api(`/tokens/${e.dataset.revoke}`,{method:'DELETE'});toast('權杖已撤銷');await refresh();})));
+  document.querySelectorAll('[data-token-scope]').forEach(e=>e.addEventListener('click',()=>action(()=>openTokenScope(e.dataset.tokenScope))));
 }
+// Chats the token may list: designated chats, plus undesignated chats it already
+// lists (which can only be removed). Each account keeps its current mode until changed.
+let scopeToken=null,scopeChats=new Map();
+async function openTokenScope(id){
+  const token=state.tokens.find(t=>t.id===id);if(!token)throw new Error('找不到權杖；請重新整理。');
+  scopeChats=new Map(await Promise.all(token.grants.map(async g=>[g.accountId,state.accounts.some(a=>a.id===g.accountId)?await api(`/accounts/${encodeURIComponent(g.accountId)}/chats`):[]])));
+  scopeToken=token;$('#token-scope-name').textContent=`權杖：${token.name}`;
+  $('#token-scope-list').innerHTML=token.grants.map(g=>{
+    const account=state.accounts.find(a=>a.id===g.accountId),chats=(scopeChats.get(g.accountId)??[]).filter(c=>c.enabled||g.chatIds?.includes(c.id));
+    const checked=c=>g.chatIds?g.chatIds.includes(c.id):!!c.enabled;
+    return `<div class="token-scope-account" data-scope-account="${escape(g.accountId)}"><div class="grant-row"><div><strong>${escape(account?accountName(account):'已移除帳號')}</strong><small>${chats.filter(c=>c.enabled).length} 個開放聊天室</small></div><div class="grant-options"><label class="switch-label"><input type="checkbox" class="switch" name="read" ${g.read?'checked':''}>讀取</label><label class="switch-label"><input type="checkbox" class="switch" name="send" ${g.send?'checked':''}>傳送</label></div></div>
+      <div class="segmented wide" role="radiogroup" aria-label="聊天室範圍"><label><input type="radio" name="scope-${escape(g.accountId)}" value="all" ${g.chatIds?'':'checked'}><span>所有開放聊天室</span></label><label><input type="radio" name="scope-${escape(g.accountId)}" value="selected" ${g.chatIds?'checked':''}><span>指定聊天室</span></label></div>
+      <p class="dialog-note" data-scope-all ${g.chatIds?'hidden':''}>包含日後開放給 AI 的聊天室。之後若要新增聊天室，請先改為「指定聊天室」。</p>
+      <div class="picker-list" data-scope-chats ${g.chatIds?'':'hidden'}>${chats.length?chats.map(c=>`<label class="pick"><input type="checkbox" data-scope-chat="${escape(c.id)}" ${checked(c)?'checked':''}><span class="pick-main"><strong>${escape(chatName(c))}</strong><small><span class="tag">${escape(nice(c.kind))}</span>${c.enabled?'':'<span class="tag">未開放</span>'}<code>${escape(c.id)}</code></small></span></label>`).join(''):'<p class="muted">尚無開放給 AI 的聊天室。</p>'}</div></div>`;
+  }).join('');
+  document.querySelectorAll('[data-scope-account]').forEach(row=>row.querySelectorAll('input[type=radio]').forEach(input=>input.addEventListener('change',()=>{const all=row.querySelector('input[value=all]').checked;row.querySelector('[data-scope-all]').hidden=!all;row.querySelector('[data-scope-chats]').hidden=all;})));
+  $('#token-scope-dialog').showModal();
+}
+$('#token-scope-form').addEventListener('submit',event=>{event.preventDefault();action(async()=>{
+  const token=scopeToken;if(!token)return;
+  const grants=[...document.querySelectorAll('[data-scope-account]')].map(row=>{
+    const all=row.querySelector('input[value=all]').checked,chatIds=[...row.querySelectorAll('[data-scope-chat]:checked')].map(e=>e.dataset.scopeChat);
+    return {accountId:row.dataset.scopeAccount,read:row.querySelector('[name=read]').checked,send:row.querySelector('[name=send]').checked,...(all?{}:{chatIds})};
+  }).filter(g=>g.read||g.send);
+  if(!grants.length)throw new Error('至少需保留一個帳號的讀取或傳送權限；若要停用，請撤銷權杖。');
+  if(grants.some(g=>g.chatIds&&!g.chatIds.length))throw new Error('「指定聊天室」至少需選擇一個聊天室；若要移除帳號權限，請關閉讀取與傳送。');
+  const chatLabel=(accountId,chatId)=>{const c=scopeChats.get(accountId)?.find(c=>c.id===chatId);return c?chatName(c):chatId;};
+  try{
+    const result=await saveTokenScope({token,grants,request:api,names:{accountName:id=>{const a=state.accounts.find(a=>a.id===id);return a?accountName(a):'已移除帳號';},chatName:chatLabel}});
+    if(result.unchanged){toast('範圍未變更');return;}if(result.cancelled)return;
+    $('#token-scope-dialog').close();scopeToken=null;toast('已更新權杖範圍');
+  }catch(error){
+    // The displayed scope may be stale; reopen from refreshed state to retry.
+    $('#token-scope-dialog').close();scopeToken=null;throw error;
+  }finally{await refresh();}
+});});
 let localAccessSignature;
 function renderLocalAccess(){
   const local=state.gateway.authentication==='local';

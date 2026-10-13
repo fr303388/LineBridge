@@ -23,8 +23,8 @@
     "/api/v1/accounts/{id}/chats/{chatId}/messages/{messageId}/media": {
       "get": {
         "operationId": "readImage",
-        "summary": "Read a scoped archived image or basic sticker preview",
-        "description": "Requires read permission and an archived message with media metadata. Returns PNG/JPEG base64 data, MIME, dimensions, SHA-256 and untrustedContent. 1 MiB, 16 megapixels, 25-second upstream deadline. No disk cache. Personal E2EE media must still appear in the last 100 messages. Custom stickers and unsupported types fail explicitly.",
+        "summary": "Read a scoped archived image, basic sticker preview or voice message",
+        "description": "Requires read permission and an archived image, sticker or audio message. Returns kind, base64 data, MIME, SHA-256 and untrustedContent; images (PNG/JPEG) add dimensions, voice messages (kind audio, M4A/3GP, unmodified and not transcribed) add durationMs when the container declares it. 1 MiB, 16 megapixels, 25-second upstream deadline. No disk cache. Personal E2EE media must still appear in the last 100 messages. LINE placeholder sticker labels such as [Sticker] and STKOPT 0 are allowed; custom-text or option-bearing stickers and unsupported types fail explicitly.",
         "parameters": [
           {
             "name": "id",

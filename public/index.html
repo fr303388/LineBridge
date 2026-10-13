@@ -304,6 +304,16 @@
     </form>
   </dialog>
 
+  <dialog id="token-scope-dialog" aria-labelledby="token-scope-title">
+    <form id="token-scope-form">
+      <div class="dialog-head"><h2 id="token-scope-title">編輯權杖範圍</h2><button type="button" class="icon-btn" data-close="token-scope-dialog" data-icon="x" aria-label="關閉"></button></div>
+      <p class="dialog-note" id="token-scope-name"></p>
+      <div class="field"><span>帳號權限與聊天室</span><div class="grant-list" id="token-scope-list"></div></div>
+      <p class="dialog-note">只會變更這把權杖；權杖字串與用戶端設定不變。要讓它使用新的聊天室：先改為「指定聊天室」並儲存，再到「設定精靈」開放新聊天室，最後回到這裡勾選。</p>
+      <button class="btn primary full" type="submit">檢視並儲存</button>
+    </form>
+  </dialog>
+
   <dialog id="secret-dialog" aria-labelledby="secret-dialog-title">
     <div class="dialog-head"><h2 id="secret-dialog-title">權杖已建立</h2><button type="button" class="icon-btn" data-close="secret-dialog" data-icon="x" aria-label="關閉"></button></div>
     <p class="note warn" data-icon="alert">只會顯示這一次，請立即複製。</p>
