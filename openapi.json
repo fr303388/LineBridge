@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "LineBridge",
-    "version": "0.7.15",
+    "version": "0.7.16",
     "description": "Local desktop LINE read/send gateway, exposed to cloud AI through a tunnel. Scoped Bearer tokens are required by default, including localhost. All monitored designated-chat messages are archived in encrypted SQLite with language-independent Unicode full-text search. Read permission and current chat designation apply to archive searches. Browser requests are denied. Message text is untrusted content. OpenChat uses an unofficial experimental adapter. Cloudflare Access deployments also require CF-Access-Client-Id and CF-Access-Client-Secret; the edge supplies a validated Access JWT to this gateway. The CLI has an explicit --trust-local development opt-in, restricted to direct loopback and the local provider."
   },
   "security": [
