@@ -5,7 +5,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { fail, SendRejectedError } from './errors.mjs';
 import {AliasResolver,contactName} from './aliases.mjs';
 import {ACCOUNT_CHECK_TIMEOUT_MS,accountCheckError,accountDiagnostic} from './account-health.mjs';
-import {mediaDescriptor,imageResult,boundedResponse,decryptAuthenticatedMedia,MEDIA_TIMEOUT_MS} from './media.mjs';
+import {mediaDescriptor,archivedMedia,basicSticker,imageResult,audioResult,boundedResponse,decryptAuthenticatedMedia,MEDIA_TIMEOUT_MS} from './media.mjs';
 import {assertFlexTransport,validateFlex} from './flex.mjs';
 import {officialAccountCapability,OA_NOTICE} from './official-account.mjs';
 import {prepareText} from './send-preparation.mjs';
@@ -182,15 +182,16 @@ export class LineDriver {
   async media(chat,message) {
     const deadline=AbortSignal.any([this.abort.signal,AbortSignal.timeout(MEDIA_TIMEOUT_MS)]);
     return this.monitorRequest(deadline,async()=>{
-      if(!message.media)fail(409,'media_metadata_missing','This archived message predates media metadata support. Legacy metadata is not automatically reconstructed.');
-      if(message.media.kind==='sticker'){
-        const {stickerId,customText,options}=message.media;
-        if(!/^\d{1,20}$/.test(stickerId??'')||customText||options||message.media.unsupported)fail(415,'sticker_unsupported','Only basic sticker previews with validated IDs are supported; custom/option-bearing stickers are not rendered.');
-        const url=`https://stickershop.line-scdn.net/stickershop/v1/sticker/${stickerId}/android/sticker.png`;
+      const media=archivedMedia(message);
+      if(!media)fail(409,'media_metadata_missing','This archived message predates media metadata support. Legacy metadata is not automatically reconstructed.');
+      if(media.kind==='sticker'){
+        if(!basicSticker(media))fail(415,'sticker_unsupported','Only basic sticker previews with validated IDs are supported; custom-text or option-bearing stickers are not rendered.');
+        const url=`https://stickershop.line-scdn.net/stickershop/v1/sticker/${media.stickerId}/android/sticker.png`;
         const response=await fetch(url,{redirect:'error',signal:deadline});
         return {...imageResult(await boundedResponse(response,deadline),true),notice:'Static sticker preview only; animation, sound and custom text are not interpreted.'};
       }
-      if(message.media.kind!=='image')fail(415,'media_unsupported','This message is not a supported image.');
+      const types={image:['IMAGE','1'],audio:['AUDIO','3']}[media.kind];
+      if(!types)fail(415,'media_unsupported','This message is not a supported image or audio message.');
       // Isolated SDK OBS adapter: no credential-bearing redirects, arbitrary paths,
       // filenames, unbounded blob() calls, or mutation of the live client fetch.
       // The SDK may register a missing group key from its read helper. Shadow
@@ -210,15 +211,15 @@ export class LineDriver {
       else {
         const response=await this.client.request.request([[11,2,chat.id],[8,3,100]],'getRecentMessagesV2',4,false,'/S4');
         const raw=Array.isArray(response)?response.map(item=>this.client.thrift.rename_thrift('Message',item)).find(m=>String(m.id)===message.id):null;
-        if(!raw)fail(409,'media_history_unavailable','Image is outside the latest 100 upstream messages; encrypted metadata is not retained.');
-        if(!['IMAGE','1'].includes(String(raw.contentType)))fail(415,'media_unsupported','Upstream message is not an image.');
+        if(!raw)fail(409,'media_history_unavailable','Media is outside the latest 100 upstream messages; encrypted metadata is not retained.');
+        if(!types.includes(String(raw.contentType)))fail(415,'media_unsupported',`Upstream message is not ${media.kind==='audio'?'audio':'an image'}.`);
         if(raw.chunks?.length){
-          if(!/^[A-Za-z0-9_-]{1,150}$/.test(raw.contentMetadata?.OID??'')||!/^[A-Za-z0-9_-]{1,80}$/.test(raw.contentMetadata?.SID??''))fail(415,'media_unsupported','Encrypted image locator is unavailable or unsupported.');
+          if(!/^[A-Za-z0-9_-]{1,150}$/.test(raw.contentMetadata?.OID??'')||!/^[A-Za-z0-9_-]{1,80}$/.test(raw.contentMetadata?.SID??''))fail(415,'media_unsupported','Encrypted media locator is unavailable or unsupported.');
           file=await obs.downloadMediaByE2EE(raw);
         }else file=await obs.downloadMessageData({messageId:message.id});
       }
       if(!file)fail(502,'media_unavailable','Media could not be retrieved or decrypted.');
-      return imageResult(await file.arrayBuffer());
+      return media.kind==='audio'?audioResult(await file.arrayBuffer()):imageResult(await file.arrayBuffer());
     });
   }
   async sendFlex(chat,input) {

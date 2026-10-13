@@ -107,6 +107,7 @@ export function createApps({hub,tunnels,root,adminPort=3210,gatewayPort=3211,clo
   admin.get('/admin/accounts/:id/chats/:chatId/text-capability',asyncRoute(async(req,res)=>res.json(await hub.textCapability(adminActor,req.params.id,req.params.chatId))));
   admin.post('/admin/accounts/:id/chats/:chatId/messages',asyncRoute(async(req,res)=>res.json(await hub.send(adminActor,req.params.id,req.params.chatId,req.body.text,req.body.idempotencyKey,'text',{acknowledgeOaTransport:req.body.acknowledgeOaTransport}))));
   admin.post('/admin/tokens',(req,res)=>res.status(201).json(hub.createToken(req.body)));
+  admin.put('/admin/tokens/:id/grants',(req,res)=>res.json(hub.updateTokenScope(req.params.id,req.body)));
   admin.delete('/admin/tokens/:id',(req,res)=>{hub.store.revoke(req.params.id);hub.store.audit('local-admin','token.revoke',null,null,'ok');res.json({ok:true});});
   admin.put('/admin/tunnel',(req,res)=>res.json(tunnels.configure(req.body)));
   admin.post('/admin/tunnel/start',asyncRoute(async(req,res)=>res.json(await tunnels.start(req.body.connectorToken))));

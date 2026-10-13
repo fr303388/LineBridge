@@ -42,7 +42,7 @@ export class ChatAccess {
   // Selecting a chat opens a shared gate, so another client must not gain it too.
   conflicts(id,chatId,tokenId){
     if(this.authentication()==='local'&&(this.hub.localAccess(id).read||this.hub.localAccess(id).send))fail(409,'local_access_conflict','Token-free local access would also gain this chat. Use token authentication before adding it to the managed profile.');
-    if(this.store.tokens().some(t=>t.id!==tokenId&&active(t)&&t.grants.some(g=>g.accountId===id&&(g.read||g.send)&&(!g.chatIds||g.chatIds.includes(chatId)))))fail(409,'manual_grant_conflict','Another client would also gain access to this chat. Review its scope under AI access before trying again. No grants were changed.');
+    if(this.store.tokens().some(t=>t.id!==tokenId&&active(t)&&t.grants.some(g=>g.accountId===id&&(g.read||g.send)&&(!g.chatIds||g.chatIds.includes(chatId)))))fail(409,'manual_grant_conflict','Another client would also gain access to this chat. Under AI access, edit that token’s scope to selected chats, then try again. No grants were changed.');
   }
   // Increasing access needs bounded proof that the protected profile still holds
   // this bearer. Reducing access never waits on a locked or expired profile.

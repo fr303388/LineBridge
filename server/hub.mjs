@@ -11,10 +11,14 @@ import {ACCOUNT_CHECK_TIMEOUT_MS,ACCOUNT_CHECK_INTERVAL_MS,accountDiagnostic,acc
 import {refreshIntervalSeconds,MIN_REFRESH_INTERVAL_SECONDS,MAX_REFRESH_INTERVAL_SECONDS} from './monitor-policy.mjs';
 import {DebugLogging} from './debug-logging.mjs';
 import {validateFlex,assertFlexTransport} from './flex.mjs';
-import {imageResult} from './media.mjs';
+import {imageResult,audioResult,archivedMedia} from './media.mjs';
 
 const accountInput=z.object({label:z.string().trim().min(1).max(80),kind:z.enum(['line','demo']).default('line'),device:z.enum(['IOSIPAD','DESKTOPWIN','ANDROIDSECONDARY']).default('IOSIPAD')}).strict();
-const tokenInput=z.object({name:z.string().trim().min(1).max(80),days:z.number().int().min(1).max(90).default(7),grants:z.array(z.object({accountId:z.string().min(1),read:z.boolean(),send:z.boolean(),chatIds:z.array(z.string().min(1).max(150)).min(1).max(1000).optional(),localOnly:z.literal(true).optional()}).strict()).min(1).max(30)}).strict();
+const grantFields={accountId:z.string().min(1),read:z.boolean(),send:z.boolean(),chatIds:z.array(z.string().min(1).max(150)).min(1).max(1000).optional()};
+const tokenInput=z.object({name:z.string().trim().min(1).max(80),days:z.number().int().min(1).max(90).default(7),grants:z.array(z.object({...grantFields,localOnly:z.literal(true).optional()}).strict()).min(1).max(30)}).strict();
+const tokenScopeInput=z.object({grants:z.array(z.object(grantFields).strict()).min(1).max(30),currentGrants:z.array(z.object({accountId:z.string(),read:z.boolean(),send:z.boolean(),chatIds:z.array(z.string()).max(1000).optional(),localOnly:z.boolean().optional()}).strict()).max(30),confirmed:z.literal(true)}).strict();
+// Order-insensitive identity of a grant list; omitted chatIds (all designated chats) differs from any list.
+const grantKey=grants=>JSON.stringify(grants.map(g=>[g.accountId,g.read,g.send,g.chatIds?[...g.chatIds].sort():null,g.localOnly===true]).sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0));
 const localAccessInput=z.object({read:z.boolean(),send:z.boolean()}).strict();
 export const adminActor={id:'local-admin',admin:true};
 export const localActor=Object.freeze({id:'local-agent',local:true});
@@ -287,23 +291,27 @@ export class Hub {
       } catch(error){this.store.audit(actor.id,'messages.read',id,chatId,'failed');if(fresh)this.debug.record('message-refresh','failed',{durationMs:Date.now()-startedAt,failureKind:'service',httpStatus:publicError(error).status},id,chatId);throw error;}
     });
   }
-  async media(actor,id,chatId,messageId) {
+  // kinds limits which archived media this caller can render (MCP image content
+  // cannot carry audio); the HTTP API and CLI accept every supported kind.
+  async media(actor,id,chatId,messageId,{kinds}={}) {
     this.authorize(actor,id,'read',chatId);this.limit(actor);
     if(typeof messageId!=='string'||!/^[A-Za-z0-9_-]{1,150}$/.test(messageId))fail(400,'invalid_message_id','Supply a valid archived message ID.');
     return this.serialized(id,async()=>{
       const chat=this.authorize(actor,id,'read',chatId);
       const row=this.store.db.prepare('SELECT event_id,cipher FROM messages WHERE account_id=? AND chat_id=? AND message_id=?').get(id,chatId,messageId);
       if(!row)fail(404,'media_not_archived','Media retrieval requires a message captured in this designated chat archive.');
-      const message=this.vault.unseal(row.cipher,`message:${row.event_id}`);
-      if(!message.media)fail(409,'media_metadata_missing','This archived message has no media descriptor; legacy records are not silently refetched.');
+      const message=this.vault.unseal(row.cipher,`message:${row.event_id}`),media=archivedMedia(message);
+      if(!media)fail(409,'media_metadata_missing','This archived message has no image, sticker or audio descriptor; legacy records are not silently refetched.');
+      if(kinds&&!kinds.includes(media.kind))fail(415,'media_kind_mismatch',media.kind==='audio'?'This message is audio. Use line_read_audio or the media API.':'This message is not audio. Use line_read_image or the media API.');
       const driver=this.driver(id);if(!driver.media)fail(415,'media_unsupported','This account adapter does not support media.');
       try{
-        const result=await driver.media(chat,message);
+        const result=await driver.media(chat,{...message,media});
         this.authorize(actor,id,'read',chatId);
         // Validate the private worker boundary as well as upstream bytes.
-        const checked=imageResult(Buffer.from(result.data??'','base64'),result.preview===true);
+        const data=Buffer.from(result.data??'','base64');
+        const checked=media.kind==='audio'?{kind:'audio',...audioResult(data)}:{kind:'image',...imageResult(data,result.preview===true)};
         this.store.audit(actor.id,'media.read',id,chatId,'ok');
-        return {accountId:id,chatId,messageId,...checked,...(result.preview?{notice:'Static preview; animation, sound and custom text are not interpreted.'}:{}),retention:'No server image cache; bytes live only for this request.'};
+        return {accountId:id,chatId,messageId,...checked,...(result.preview?{notice:'Static preview; animation, sound and custom text are not interpreted.'}:{}),retention:'No server media cache; bytes live only for this request.'};
       }catch(error){this.store.audit(actor.id,'media.read',id,chatId,'failed');throw error;}
     });
   }
@@ -360,6 +368,33 @@ export class Hub {
     for(const g of data.grants) {this.record(g.accountId);if(!g.read&&!g.send)fail(400,'empty_grant','Choose read or send for each account.');if(g.chatIds){if(new Set(g.chatIds).size!==g.chatIds.length)fail(400,'duplicate_chat','Choose each chat once.');for(const id of g.chatIds)this.authorize(adminActor,g.accountId,null,id);}}
     const token=`lb_${randomBytes(32).toString('base64url')}`,record=this.store.addToken(data.name,digest(token),data.grants,data.days);
     this.store.audit('local-admin','token.create',null,null,'ok');const {hash,...safe}=record;return {...safe,token};
+  }
+  // Replace a manual token's grants in place so its clients keep the same bearer.
+  // Designation is the shared gate: a chat can newly join a token only once it is
+  // designated, so listing a token never makes a later designation widen it.
+  updateTokenScope(id,input) {
+    const data=tokenScopeInput.parse(input);
+    return this.store.transaction(()=>{
+      const token=this.store.token(id);
+      if(!token)fail(404,'token_not_found','Token not found.');
+      if(token.revoked||!(Date.parse(token.expires_at)>Date.now()))fail(409,'token_inactive','Revoked or expired tokens cannot be changed. Create a new token instead.');
+      if(token.grants.some(g=>g.localOnly))fail(409,'managed_token','This is the Local AI setup token. Change its chats in the setup wizard.');
+      if(grantKey(token.grants)!==grantKey(data.currentGrants))fail(409,'token_scope_changed','This token’s scope changed. Refresh and review it again.');
+      if(new Set(data.grants.map(g=>g.accountId)).size!==data.grants.length)fail(400,'duplicate_grant','Choose each account once.');
+      for(const g of data.grants){
+        this.record(g.accountId);if(!g.read&&!g.send)fail(400,'empty_grant','Choose read or send for each account.');
+        if(!g.chatIds)continue;
+        if(new Set(g.chatIds).size!==g.chatIds.length)fail(400,'duplicate_chat','Choose each chat once.');
+        const previous=token.grants.find(p=>p.accountId===g.accountId);
+        for(const chatId of g.chatIds){
+          const chat=this.store.chat(g.accountId,chatId);
+          if(!chat)fail(404,'chat_not_found','Refresh the chat list and try again.');
+          if(!chat.enabled&&!(previous&&(!previous.chatIds||previous.chatIds.includes(chatId))))fail(409,'chat_not_designated','Designate this chat for AI access before adding it to a token.');
+        }
+      }
+      this.store.setTokenGrants(id,data.grants);this.store.audit('local-admin','token.scope',null,null,'ok');
+      const {hash,...safe}=this.store.token(id);return safe;
+    });
   }
   tokens() {return this.store.tokens().map(({hash,...safe})=>safe);}
   cancelHealth(r) {

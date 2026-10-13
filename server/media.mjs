@@ -17,11 +17,22 @@ export async function decryptAuthenticatedMedia(e2ee,input,keyMaterial){
 export function mediaDescriptor(raw){
   const type=String(raw.contentType),m=raw.contentMetadata??{};
   if(type==='IMAGE'||type==='1')return {kind:'image',encrypted:!!raw.chunks?.length};
+  if(type==='AUDIO'||type==='3')return {kind:'audio',encrypted:!!raw.chunks?.length};
   if(type!=='STICKER'&&type!=='7')return undefined;
   const result={kind:'sticker'};
   for(const [key,name] of [['STKID','stickerId'],['STKPKGID','packageId'],['STKVER','version']])if(typeof m[key]==='string'&&/^\d{1,20}$/.test(m[key]))result[name]=m[key];
   for(const [key,name] of [['STKOPT','options'],['STKTXT','customText']])if(m[key]!==undefined){if(typeof m[key]==='string'&&m[key].length<=1000)result[name]=m[key];else result.unsupported=true;}
   return result;
+}
+// Audio archived before audio support has no descriptor, but needs none: the
+// driver re-fetches and re-checks the upstream message before any download.
+export function archivedMedia(message){return message.media??(['AUDIO','3'].includes(String(message.contentType))?{kind:'audio'}:undefined);}
+// LINE labels ordinary stickers with a localized placeholder such as "[Sticker]"
+// or "[スタンプ]" in STKTXT, and STKOPT "0" means no option. Neither changes the
+// image. Any other text or option still marks a custom or option-bearing sticker.
+const STICKER_PLACEHOLDER=/^\[[^[\]\r\n]{1,40}\]$/u;
+export function basicSticker(media){
+  return /^\d{1,20}$/.test(media?.stickerId??'')&&!media.unsupported&&[undefined,'','0'].includes(media.options)&&(!media.customText||STICKER_PLACEHOLDER.test(media.customText));
 }
 // Only bounded, raster PNG/JPEG output. Never trust upstream filenames or MIME.
 export function imageResult(input,preview=false){
@@ -50,11 +61,39 @@ export function imageResult(input,preview=false){
   if(!mimeType||!width||!height||width>8192||height>8192||width*height>16_000_000)fail(415,'media_unsupported','Only bounded PNG/JPEG images up to 16 megapixels are supported.');
   return {mimeType,width,height,bytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex'),data:bytes.toString('base64'),preview,untrustedContent:true};
 }
+// Only bounded MP4-family (M4A/3GP) audio. The container is walked, never decoded;
+// the 1 MiB cap keeps the base64 reply inside the private worker pipe limit.
+export function audioResult(input){
+  const bytes=Buffer.from(input),unsupported=()=>fail(415,'media_unsupported','Only bounded M4A/3GP audio is supported.');
+  if(!bytes.length||bytes.length>MEDIA_MAX_BYTES)fail(413,'media_too_large','Audio exceeds the 1 MiB limit.');
+  const boxes=(start,end,visit)=>{
+    for(let offset=start;offset<end;){
+      if(offset+8>end)unsupported();
+      let size=bytes.readUInt32BE(offset),header=8;const type=bytes.toString('latin1',offset+4,offset+8);
+      if(size===1){if(offset+16>end)unsupported();size=Number(bytes.readBigUInt64BE(offset+8));header=16;}else if(size===0)size=end-offset;
+      if(!/^[\x20-\x7e]{4}$/.test(type)||size<header||offset+size>end)unsupported();
+      visit(type,offset,offset+header,offset+size);offset+=size;
+    }
+  };
+  let brand,moov=false,mdat=false,durationMs;
+  boxes(0,bytes.length,(type,start,body,end)=>{
+    if(start===0){if(type!=='ftyp'||end-body<8)unsupported();brand=bytes.toString('latin1',body,body+4);}
+    if(type==='mdat')mdat=true;
+    if(type==='moov'){moov=true;boxes(body,end,(child,_start,data,childEnd)=>{
+      if(child!=='mvhd'||childEnd-data<20)return;
+      const v1=bytes[data]===1;if(v1&&childEnd-data<32)return;
+      const scale=bytes.readUInt32BE(data+(v1?20:12)),length=v1?Number(bytes.readBigUInt64BE(data+24)):bytes.readUInt32BE(data+16);
+      const ms=Math.round(length*1000/scale);if(scale>0&&length!==0xffffffff&&Number.isSafeInteger(ms)&&ms<=86_400_000)durationMs=ms;
+    });}
+  });
+  if(!brand||!moov||!mdat)unsupported();
+  return {mimeType:/^3g/.test(brand)?'audio/3gpp':'audio/mp4',bytes:bytes.length,...(durationMs!==undefined?{durationMs}:{}),sha256:createHash('sha256').update(bytes).digest('hex'),data:bytes.toString('base64'),untrustedContent:true};
+}
 export async function boundedResponse(response,signal){
   if(!response.ok){await response.body?.cancel();fail(502,'media_unavailable','LINE media is unavailable, expired, or access was rejected.');}
-  if(Number(response.headers.get('content-length'))>MEDIA_MAX_BYTES){await response.body?.cancel();fail(413,'media_too_large','Image exceeds the 1 MiB limit.');}
+  if(Number(response.headers.get('content-length'))>MEDIA_MAX_BYTES){await response.body?.cancel();fail(413,'media_too_large','Media exceeds the 1 MiB limit.');}
   const reader=response.body?.getReader();if(!reader)fail(502,'media_unavailable','Media body is unavailable.');
   const chunks=[];let size=0;
-  try{for(;;){signal?.throwIfAborted();const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>MEDIA_MAX_BYTES)fail(413,'media_too_large','Image exceeds the 1 MiB limit.');chunks.push(Buffer.from(value));}return Buffer.concat(chunks);}
+  try{for(;;){signal?.throwIfAborted();const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>MEDIA_MAX_BYTES)fail(413,'media_too_large','Media exceeds the 1 MiB limit.');chunks.push(Buffer.from(value));}return Buffer.concat(chunks);}
   finally{await reader.cancel().catch(()=>{});}
 }

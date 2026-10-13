@@ -9,7 +9,7 @@ import {discoverLocal} from './discovery.mjs';
 import {writeFile} from 'node:fs/promises';
 import {resolve} from 'node:path';
 import {validateFlex} from '../server/flex.mjs';
-import {imageResult} from '../server/media.mjs';
+import {imageResult,audioResult} from '../server/media.mjs';
 import {validateTimeRange} from '../public/search-time.js';
 
 export const DATA_COMMANDS = ['discover','version','accounts','chats','read','refresh','search','events','send','send-flex','media','auth'];
@@ -69,7 +69,8 @@ Enrollment stores an EXISTING scoped token using OS protection. It does not
 create tokens, expand grants, log in to LINE, or set up a persistent service.
 Sends require explicit user authorization. Unknown delivery exits 8 and must
 be inspected before any further send. See CLI.md for exit codes and examples.
-Media writes a NEW local PNG/JPEG file; it never overwrites files or invokes vision.
+Media writes a NEW local PNG/JPEG image or M4A/3GP voice file; it never overwrites
+files, invokes vision or transcribes audio.
 Flex requires acknowledgeTransportSecurity:true in its JSON payload: Flex is not
 Letter Sealed. Personal Talk only; OpenChat Flex is blocked pending verification.
 `;
@@ -207,10 +208,14 @@ async function execute(argv,context) {
   const selected=await credentials(values,context);
   const result=await gatewayRequest({...request,url:selected.url,credentials:selected,timeoutMs:context.timeoutMs,fetchImpl:context.fetchImpl});
   if(command==='media'){
-    let checked;try{checked=imageResult(Buffer.from(result.data??'','base64'),result.preview===true);if(checked.sha256!==result.sha256||checked.mimeType!==result.mimeType)throw new Error();}catch{throw new ClientError('invalid_media','Gateway returned invalid image data.',EXIT.transport);}
+    // Validate the kind the gateway declared; older gateways only return images.
+    const audio=result.kind==='audio';
+    let checked;try{const bytes=Buffer.from(result.data??'','base64');checked=audio?audioResult(bytes):imageResult(bytes,result.preview===true);if(checked.sha256!==result.sha256||checked.mimeType!==result.mimeType)throw new Error();}catch{throw new ClientError('invalid_media',`Gateway returned invalid ${audio?'audio':'image'} data.`,EXIT.transport);}
     const output=resolve(values.output);
     try{await writeFile(output,Buffer.from(checked.data,'base64'),{flag:'wx',mode:0o600});}catch{throw new ClientError('output_failed','Could not create the output file. Existing files are never overwritten.',EXIT.usage);}
-    const {data,...metadata}=checked;return {...metadata,path:output,visionInvoked:false,notice:'Local image file created. Read it with an image-capable tool to inspect its contents; delete it when no longer needed.'};
+    const {data,...metadata}=checked;
+    return audio?{kind:'audio',...metadata,path:output,transcribed:false,notice:'Local audio file created. It has not been played or transcribed; use an audio-capable tool if needed and delete it when no longer needed.'}
+      :{...(result.kind?{kind:result.kind}:{}),...metadata,path:output,visionInvoked:false,notice:'Local image file created. Read it with an image-capable tool to inspect its contents; delete it when no longer needed.'};
   }
   return result;
 }

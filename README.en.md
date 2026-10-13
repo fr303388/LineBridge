@@ -8,7 +8,8 @@ For ongoing CLI operations, also read the repository's [LineBridge CLI skill](ht
 
 ## Discover existing local AI access
 
-For on-demand archived images/basic sticker previews and personal Talk Flex sends,
+For on-demand archived images/basic sticker previews, voice messages (M4A/3GP via
+`media` or gateway MCP `line_read_audio`) and personal Talk Flex sends,
 see [images and Flex](CLI.md#images-and-flex-messages). Flex is not Letter Sealed
 and requires an explicit security acknowledgment. OpenChat Flex is blocked pending
 protocol verification; no LIFF fallback or automatic consent is used. These new
