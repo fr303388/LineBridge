@@ -154,6 +154,11 @@ netsh interface ipv4 show excludedportrange protocol=tcp
 
 ## 8. 隱私與安全提醒
 
+- **非官方介面風險**：LineBridge 是非官方橋接（LINE interfaces are unofficial；OpenChat 屬實驗性）。
+  使用本身可能處於 LINE 官方條款之外的灰色地帶，也可能觸發平台風控；無法保證帳號不受影響，
+  請自行評估、風險自負。
+- **建議低頻、私人用途**：不要大量自動化抓取多個聊天室或他人的訊息，不要公開散布或商用取回的內容；
+  排程自動化請拉長間隔、只處理自己的聊天室。
 - 取回的圖片是**私人聊天內容**：不要上傳到公開儲存庫、雲端硬碟或第三方服務。
 - 不要把資料目錄（`bridge.sqlite`、`vault-key.*`、`service.json`）、CLI profile、
   token、日誌或任何下載的媒體檔提交到版本庫。
